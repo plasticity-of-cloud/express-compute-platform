@@ -70,12 +70,14 @@ See the [Deployment Guide](docs/user-guides/deployment.md) for full instructions
 | [GitHub Actions Pipeline](docs/user-guides/github-actions-pipeline.md) | CI/CD setup for automated AMI builds |
 | [Cluster Setup](docs/user-guides/cluster-setup.md) | Boot sequence and cluster lifecycle |
 | [Node Pools](docs/user-guides/node-pools.md) | Karpenter NodePool and EC2NodeClass configuration |
+| [k3s-Xpress](docs/user-guides/k3s-xpress.md) | Lightweight k3s clusters with golden AMI strategy |
 
 ### Reference
 
 | Document | Description |
 |----------|-------------|
 | [Component Versions](COMPONENT_VERSIONS.md) | Pinned EKS-D component version matrix |
+| [k3s Component Versions](K3S_COMPONENT_VERSIONS.md) | Pinned k3s component version matrix |
 | [AMI Pipeline Setup](docs/AMI_PIPELINE_SETUP.md) | One-time AWS account setup for AMI builds |
 | [AMI Verification](docs/AMI_VERIFICATION.md) | Verify AMI signatures offline |
 | [Deployment Bundle](docs/DEPLOYMENT_BUNDLE.md) | Bundle contents and build process |

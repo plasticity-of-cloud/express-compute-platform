@@ -1,0 +1,178 @@
+name: k3s Release
+
+on:
+  push:
+    tags:
+      - 'k3s-v*'
+    paths:
+      - 'ami-builder/k3s-xpress.pkr.hcl'
+      - 'ami-builder/scripts/k3s/**'
+      - 'cluster-setup/k3s/**'
+      - 'K3S_COMPONENT_VERSIONS.md'
+  workflow_dispatch:
+    inputs:
+      k8s_versions:
+        description: 'Kubernetes versions to build (comma-separated)'
+        required: true
+        default: '1.35'
+      build_ami:
+        description: 'Build AMIs'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write  # OIDC for AWS
+
+jobs:
+  # ── Step 1: Build ecr-credential-provider natively per arch ──────────────
+  build-ecr-credential-provider:
+    uses: ./.github/workflows/build-ecr-credential-provider.yml
+    with:
+      k8s_versions: ${{ inputs.k8s_versions || '1.35' }}
+
+  # ── Step 2: Build k3s AMIs (Packer) ─────────────────────────────────────
+  build-k3s-ami:
+    needs: build-ecr-credential-provider
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_ami }}
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      matrix:
+        k8s_version: ['1.35']
+        arch: ['arm64', 'x86_64']
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download ecr-credential-provider artifacts
+        uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+          path: ami-builder/files/
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_PACKER_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Install Packer
+        run: |
+          PACKER_VERSION=$(grep '^packer ' .tool-versions | awk '{print $2}')
+          curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
+          unzip -o /tmp/packer.zip -d /tmp && sudo mv /tmp/packer /usr/local/bin/packer
+          packer --version
+
+      - name: Initialize Packer
+        run: packer init ami-builder/k3s-xpress.pkr.hcl
+
+      - name: Build k3s AMI
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          ONLY=$([[ "${{ matrix.arch }}" == "arm64" ]] && echo "-only=amazon-ebs.arm64" || echo "-only=amazon-ebs.x86_64")
+          mkdir -p ami-builder/output
+          packer build \
+            ${ONLY} \
+            -var "aws_region=${AWS_REGION}" \
+            -var "k3s_kubernetes_version=${{ matrix.k8s_version }}" \
+            -var "ami_version=$(date +%Y%m%d-%H%M)" \
+            -var "build_type=release" \
+            ami-builder/k3s-xpress.pkr.hcl
+          cp ami-builder/output/ami-manifest-k3s-entries.json \
+             ami-manifest-k3s-${{ matrix.k8s_version }}-${{ matrix.arch }}.json
+
+      - name: Sign AMI
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          AMI_ID=$(jq -r '.[0].ami_id' ami-builder/output/ami-manifest-k3s-entries.json)
+          AMI_VERSION=$(date +%Y%m%d-%H%M)
+          # Reuse the shared signing script
+          MANIFEST_FILE="ami-builder/output/packer-manifest-k3s.json" \
+          AWS_REGION="${AWS_REGION}" \
+          bash ami-builder/scripts/sign-ami.sh
+          cp ami-builder/output/ami-signatures-entries.json \
+             ami-builder/output/ami-signatures-k3s-${{ matrix.k8s_version }}-${{ matrix.arch }}.json
+
+      - name: Make AMI public
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          AMI_ID=$(jq -r '.[0].ami_id' ami-builder/output/ami-manifest-k3s-entries.json)
+          echo "==> Making ${AMI_ID} public"
+          aws ec2 modify-image-attribute \
+            --image-id "${AMI_ID}" \
+            --region "${AWS_REGION}" \
+            --launch-permission "Add=[{Group=all}]"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: k3s-ami-${{ matrix.k8s_version }}-${{ matrix.arch }}
+          path: |
+            ami-manifest-k3s-${{ matrix.k8s_version }}-${{ matrix.arch }}.json
+            ami-builder/output/sbom-k3s-${{ matrix.arch }}-*.spdx.json
+            ami-builder/output/ami-signatures-k3s-${{ matrix.k8s_version }}-${{ matrix.arch }}.json
+          retention-days: 90
+
+  # ── Step 3: Create GitHub release with all artifacts ─────────────────────
+  release:
+    needs: [build-k3s-ami]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+
+      - name: Prepare release assets
+        run: |
+          cp ami-builder/scripts/verify-ami.sh verify-ami.sh
+          cp ami-builder/scripts/import-ami.sh import-ami.sh
+          cp ami-builder/express-compute-ami-signing.pub.pem express-compute-ami-signing.pub.pem
+
+      - name: Merge k3s AMI manifest entries
+        run: |
+          python3 - <<'EOF'
+          import json, glob, collections
+
+          entries = []
+          for f in glob.glob("ami-manifest-k3s-*.json"):
+              entries.extend(json.load(open(f)))
+
+          manifest = collections.defaultdict(lambda: collections.defaultdict(dict))
+          for e in entries:
+              manifest[e["kubernetes_version"]][e["arch"]][e["region"]] = e["ami_id"]
+
+          json.dump(manifest, open("k3s-ami-manifest.json", "w"), indent=2)
+          print(json.dumps(manifest, indent=2))
+
+          sig_entries = []
+          for f in sorted(glob.glob("ami-signatures-k3s-*.json")):
+              sig_entries.extend(json.load(open(f)))
+
+          signatures = {e["ami_id"]: {k: v for k, v in e.items() if k != "ami_id"}
+                        for e in sig_entries}
+          json.dump(signatures, open("k3s-ami-signatures.json", "w"), indent=2)
+          EOF
+
+      - name: Generate checksums
+        run: |
+          sha256sum k3s-ami-manifest.json k3s-ami-signatures.json sbom-k3s-*.spdx.json > k3s-checksums.txt
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            k3s-ami-manifest.json
+            k3s-ami-signatures.json
+            verify-ami.sh
+            import-ami.sh
+            express-compute-ami-signing.pub.pem
+            sbom-k3s-*.spdx.json
+            k3s-checksums.txt
+          generate_release_notes: true

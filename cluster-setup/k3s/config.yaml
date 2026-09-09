@@ -1,0 +1,42 @@
+# k3s server configuration template
+# This file is rendered at boot time by setup-k3s-xpress.sh with
+# instance-specific values (NODE_IP, CLUSTER_NAME, etc.)
+# Placed here as documentation of the config schema used.
+#
+# At runtime, the final config is written to /etc/rancher/k3s/config.yaml
+
+# ─── Networking ───────────────────────────────────────────────────────────────
+# node-ip: <from IMDSv2>
+# node-external-ip: <from IMDSv2>
+# tls-san:
+#   - <NODE_IP>
+#   - <CLUSTER_NAME>
+
+cluster-cidr: "10.42.0.0/16"
+service-cidr: "10.43.0.0/16"
+cluster-dns: "10.43.0.10"
+
+# ─── Disabled components ──────────────────────────────────────────────────────
+# We disable traefik (use ALB/NLB for ingress) and servicelb (use AWS LB)
+disable:
+  - traefik
+  - servicelb
+
+# ─── Kubelet arguments ────────────────────────────────────────────────────────
+kubelet-arg:
+  - "image-credential-provider-bin-dir=/usr/bin"
+  - "image-credential-provider-config=/var/lib/rancher/k3s/agent/etc/credential-provider-config.yaml"
+  - "cloud-provider=external"
+
+# ─── Security ─────────────────────────────────────────────────────────────────
+write-kubeconfig-mode: "0644"
+
+# ─── Labels ───────────────────────────────────────────────────────────────────
+# node-label:
+#   - "express-compute.io/cluster-name=<CLUSTER_NAME>"
+#   - "express-compute.io/tenant-id=<TENANT_ID>"
+
+# ─── Datastore ────────────────────────────────────────────────────────────────
+# Default: SQLite (single-node). For HA, use:
+# datastore-endpoint: "embedded-etcd"
+# OR external PostgreSQL/MySQL for large-scale HA.
