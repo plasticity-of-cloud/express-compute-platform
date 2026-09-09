@@ -173,11 +173,25 @@ For k3s clusters, the user data must write to `/opt/k3s-xpress/cluster.env`:
 cat > /opt/k3s-xpress/cluster.env <<'ENVEOF'
 TENANT_ID=${tenant_id}
 CLUSTER_NAME=${cluster_name}
+NODE_IP=${node_ip}
+AWS_ACCOUNT_ID=${account_id}
 AWS_REGION=${region}
+NODE_ROLE_ARN=${node_role_arn}
+CLUSTER_ENDPOINT="https://${node_ip}:6443"
+POD_SUBNET=${vpc_cidr}
+PUBLIC_SUBNET_ID=${public_subnet_id}
+PRIVATE_SUBNET_ID=${private_subnet_id}
+SECURITY_GROUP_ID=${security_group_id}
 ECP_ENDPOINT=${ecp_endpoint}
+ECP_API_URL="${ecp_endpoint}/clusters/${cluster_name}/assets"
+K8S_VERSION=${k8s_version}
 PROGRESS_QUEUE_URL=${progress_queue_url}
 ENVEOF
 ```
+
+The fields are identical to the EKS-D cluster.env. `POD_SUBNET` is the VPC
+CIDR used by VPC CNI for pod IP allocation. `K8S_VERSION` is used by boot
+scripts to resolve the correct k3s binary version from `version.env`.
 
 Compare with EKS-D which writes to `/opt/eks-d/cluster.env`.
 

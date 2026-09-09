@@ -198,9 +198,19 @@ Push a tag matching `k3s-v*` to trigger the `k3s-release.yml` workflow.
 ```bash
 TENANT_ID=tenant-abc123
 CLUSTER_NAME=my-k3s-cluster
+NODE_IP=10.0.16.5
+AWS_ACCOUNT_ID=123456789012
 AWS_REGION=us-east-1
+NODE_ROLE_ARN=arn:aws:iam::123456789012:role/express-compute-tenant-abc12345-instance-role
+CLUSTER_ENDPOINT=https://10.0.16.5:6443
+POD_SUBNET=10.0.0.0/16
+PUBLIC_SUBNET_ID=subnet-0aaa111
+PRIVATE_SUBNET_ID=subnet-0bbb222
+SECURITY_GROUP_ID=sg-0ccc333
 ECP_ENDPOINT=https://api.express-compute.example.com
-PROGRESS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/...
+ECP_API_URL=https://api.express-compute.example.com/clusters/my-k3s-cluster/assets
+K8S_VERSION=1.35
+PROGRESS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/...
 ```
 
 ### version.env (baked into AMI)
