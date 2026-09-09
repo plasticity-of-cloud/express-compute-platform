@@ -4,7 +4,20 @@
 # Assumes AMI-baked prerequisites are already present:
 #   k3s binary, airgap images, Helm charts, ECR credential provider.
 #
-# Runs: k3s server start → wait for readiness → install add-ons → register
+# Same capabilities as EKS-D-Xpress: VPC CNI, Karpenter, Workload Identity,
+# aws-iam-authenticator. The only difference is the control plane binary (k3s
+# single binary vs kubeadm + separate etcd).
+#
+# Boot sequence:
+#   1.  Resolve instance metadata (IMDS)
+#   1b. Mount data volume (SQLite state)
+#   2.  Configure aws-iam-authenticator (before k3s start)
+#   3.  Write k3s config (flannel disabled, VPC CNI will handle networking)
+#   4.  Start k3s server
+#   5.  Wait for system pods + install VPC CNI
+#   6.  Install add-ons (cert-manager → ECP WI → CloudWatch → EBS CSI → metrics-server)
+#   7.  Install Karpenter + ecp-karpenter-support
+#   8.  Mark complete
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +44,7 @@ echo "=========================================="
 update_progress "booting" "Starting k3s cluster setup" 5
 
 # ── Step 1: Resolve instance metadata ─────────────────────────────────────────
-echo "Step 1/7: Resolving instance metadata..."
+echo "Step 1/8: Resolving instance metadata..."
 TOKEN=$(curl -sf -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" \
   http://169.254.169.254/latest/api/token)
 NODE_IP=$(curl -sf -H "X-aws-ec2-metadata-token: ${TOKEN}" \
@@ -47,38 +60,30 @@ fi
 echo "    Node IP: ${NODE_IP}"
 echo "    Instance: ${INSTANCE_ID}"
 echo "    Region: ${AWS_REGION}"
-update_progress "provisioning" "Instance metadata resolved" 10
+update_progress "provisioning" "Instance metadata resolved" 8
 
 # ── Step 1b: Prepare data volume ──────────────────────────────────────────────
 # Dedicated EBS volume for k3s SQLite state — same pattern as EKS-D etcd volume.
 # Must mount before k3s starts so state.db lands on the data volume.
 echo "Step 1b: Preparing k3s data volume..."
 bash "${SCRIPT_DIR}/prepare-data-volume.sh"
-update_progress "provisioning" "Data volume ready" 12
+update_progress "provisioning" "Data volume ready" 10
 
-# ── Step 2: Write k3s server configuration ────────────────────────────────────
-echo "Step 2/7: Writing k3s server configuration..."
+# ── Step 2: Configure aws-iam-authenticator (BEFORE k3s start) ────────────────
+# Must happen before k3s starts because the API server needs the webhook
+# config file to exist at startup. Same requirement as EKS-D.
+echo "Step 2/8: Configuring aws-iam-authenticator..."
+bash "${SCRIPT_DIR}/install-aws-iam-authenticator.sh"
+update_progress "provisioning" "IAM authenticator configured" 15
+
+# ── Step 3: Write k3s server configuration ────────────────────────────────────
+echo "Step 3/8: Writing k3s server configuration..."
 sudo mkdir -p /etc/rancher/k3s
 
-# CNI mode: "flannel" (default) or "vpc"
-CNI_MODE="${CNI_MODE:-flannel}"
-AUTOSCALING_MODE="${AUTOSCALING_MODE:-none}"
-echo "    CNI mode: ${CNI_MODE}"
-echo "    Autoscaling: ${AUTOSCALING_MODE}"
-
-# ── Step 2b: Configure aws-iam-authenticator (BEFORE k3s start) ───────────────
-# This must happen before k3s starts because the API server needs the webhook
-# config file to exist at startup. Same requirement as EKS-D (06-install before 07-init).
-echo "Step 2b: Configuring aws-iam-authenticator..."
-bash "${SCRIPT_DIR}/install-aws-iam-authenticator.sh"
-
-# Build k3s config based on CNI mode
-# The kube-apiserver-arg for authentication-token-webhook-config-file enables
-# IAM-based authentication for worker nodes (including EKS Optimized AMI nodes
-# launched by Karpenter).
-if [[ "${CNI_MODE}" == "vpc" ]]; then
-  # VPC CNI mode: disable Flannel entirely, let VPC CNI handle networking
-  cat <<EOF | sudo tee /etc/rancher/k3s/config.yaml
+# Always VPC CNI: disable Flannel, let VPC CNI handle networking.
+# kube-apiserver-arg enables IAM-based authentication for worker nodes
+# (including EKS Optimized AMI nodes launched by Karpenter).
+cat <<EOF | sudo tee /etc/rancher/k3s/config.yaml
 node-ip: "${NODE_IP}"
 node-external-ip: "${NODE_IP}"
 tls-san:
@@ -100,44 +105,15 @@ kubelet-arg:
 node-label:
   - "express-compute.io/cluster-name=${CLUSTER_NAME}"
   - "express-compute.io/tenant-id=${TENANT_ID}"
-  - "express-compute.io/cni=vpc"
 node-taint: []
 EOF
-else
-  # Flannel mode (default): use k3s built-in VXLAN overlay
-  cat <<EOF | sudo tee /etc/rancher/k3s/config.yaml
-node-ip: "${NODE_IP}"
-node-external-ip: "${NODE_IP}"
-tls-san:
-  - "${NODE_IP}"
-  - "${CLUSTER_NAME}"
-disable:
-$(echo "${K3S_DISABLE}" | tr ',' '\n' | sed 's/^/  - /')
-write-kubeconfig-mode: "0644"
-cluster-cidr: "10.42.0.0/16"
-service-cidr: "10.43.0.0/16"
-cluster-dns: "10.43.0.10"
-kube-apiserver-arg:
-  - "authentication-token-webhook-config-file=/etc/kubernetes/aws-iam-authenticator/kubeconfig.yaml"
-kubelet-arg:
-  - "image-credential-provider-bin-dir=/usr/bin"
-  - "image-credential-provider-config=/var/lib/rancher/k3s/agent/etc/credential-provider-config.yaml"
-  - "cloud-provider=external"
-node-label:
-  - "express-compute.io/cluster-name=${CLUSTER_NAME}"
-  - "express-compute.io/tenant-id=${TENANT_ID}"
-  - "express-compute.io/cni=flannel"
-node-taint: []
-EOF
-fi
 
-update_progress "provisioning" "k3s configuration written" 15
+update_progress "provisioning" "k3s configuration written" 18
 
-# ── Step 3: Start k3s server ──────────────────────────────────────────────────
-echo "Step 3/7: Starting k3s server..."
+# ── Step 4: Start k3s server ──────────────────────────────────────────────────
+echo "Step 4/8: Starting k3s server..."
 update_progress "k3s-starting" "Starting k3s server" 20
 
-# Install k3s service via the install script pattern (just enable systemd unit)
 cat <<'EOF' | sudo tee /etc/systemd/system/k3s.service
 [Unit]
 Description=Lightweight Kubernetes
@@ -184,16 +160,12 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-update_progress "k3s-ready" "k3s server running" 40
+update_progress "k3s-ready" "k3s server running" 35
 
-# ── Step 4: Wait for system pods ──────────────────────────────────────────────
-echo "Step 4/7: Waiting for system pods..."
-
-# VPC CNI mode: install CNI before waiting for node readiness
-if [[ "${CNI_MODE}" == "vpc" ]]; then
-  echo "    Installing VPC CNI (flannel disabled)..."
-  bash "${SCRIPT_DIR}/install-vpc-cni.sh"
-fi
+# ── Step 5: Install VPC CNI + wait for system pods ────────────────────────────
+echo "Step 5/8: Installing VPC CNI and waiting for system pods..."
+update_progress "provisioning" "Installing VPC CNI" 38
+bash "${SCRIPT_DIR}/install-vpc-cni.sh"
 
 kubectl wait --for=condition=ready pod -l k8s-app=kube-dns -n kube-system --timeout=60s || {
   echo "Warning: CoreDNS not ready within 60s, continuing..."
@@ -210,31 +182,24 @@ if [ -n "${_LOGIN_HOME}" ]; then
   echo "✓ kubeconfig copied to ${_LOGIN_USER}"
 fi
 
-update_progress "provisioning" "System pods ready" 50
+update_progress "provisioning" "VPC CNI installed, system pods ready" 50
 
-# ── Step 5: Install add-ons ───────────────────────────────────────────────────
+# ── Step 6: Install add-ons ───────────────────────────────────────────────────
 # Order: cert-manager → ECP Workload Identity → CloudWatch → EBS CSI → metrics-server
 # ECP WI must come before CloudWatch/EBS CSI because they use pod-level IAM credentials.
-echo "Step 5/7: Installing add-ons..."
+echo "Step 6/8: Installing add-ons..."
 update_progress "provisioning" "Installing add-ons" 55
 bash "${SCRIPT_DIR}/install-addons.sh"
 update_progress "provisioning" "Add-ons installed" 75
 
-# ── Step 5b: Karpenter (if autoscaling enabled) ──────────────────────────────
-if [[ "${AUTOSCALING_MODE}" == "karpenter" ]]; then
-  echo "Step 5b: Installing Karpenter..."
-  update_progress "provisioning" "Installing Karpenter" 78
-  bash "${SCRIPT_DIR}/install-karpenter.sh"
-  update_progress "provisioning" "Karpenter installed" 85
-else
-  update_progress "provisioning" "Skipping Karpenter (autoscaling=none)" 85
-fi
+# ── Step 7: Karpenter + ecp-karpenter-support ─────────────────────────────────
+echo "Step 7/8: Installing Karpenter..."
+update_progress "provisioning" "Installing Karpenter" 78
+bash "${SCRIPT_DIR}/install-karpenter.sh"
+update_progress "provisioning" "Karpenter installed" 90
 
-# ── Step 6: Finalize ──────────────────────────────────────────────────────────
-update_progress "provisioning" "Finalizing" 95
-
-# ── Step 7: Mark installation complete ────────────────────────────────────────
-echo "Step 7/7: Finalizing..."
+# ── Step 8: Mark installation complete ────────────────────────────────────────
+echo "Step 8/8: Finalizing..."
 sudo touch /opt/k3s-xpress/.installation_complete
 
 echo ""

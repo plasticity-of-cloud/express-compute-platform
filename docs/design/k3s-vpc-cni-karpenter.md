@@ -37,37 +37,32 @@ the same pattern as a kubeadm cluster with `--pod-network-cidr` omitted.
 
 ---
 
-## 2. CNI Configuration Modes
+## 2. CNI Configuration
 
-k3s-Xpress supports two CNI modes, selected at cluster creation time:
+k3s-Xpress always uses AWS VPC CNI — same as EKS-D-Xpress. Flannel is not
+supported on AWS (no SUSE/Rancher production support, no VPC integration,
+no SecurityGroups for Pods, no flow log visibility).
 
-| Mode | Flag | Pod IPs | Use Case |
-|------|------|---------|----------|
-| `flannel` (default) | `--cni flannel` | Overlay (10.42.0.0/16) | Simple, no ENI limits, dev/edge |
-| `vpc` | `--cni vpc` | VPC-native (from subnet) | Production, SecurityGroups for pods, direct pod addressing |
+k3s starts with:
 
-### Mode: Flannel (default)
-
-```
-ecp create-cluster my-k3s --distribution k3s --cni flannel
+```yaml
+flannel-backend: "none"
+disable-network-policy: true
 ```
 
-- Pods get IPs from 10.42.0.0/16 (VXLAN overlay)
-- No ENI limits — unlimited pods per node
-- NAT Gateway required for internet access
-- Cannot use SecurityGroups for Pods
+The VPC CNI DaemonSet is installed immediately after k3s starts, before any
+other add-ons. Nodes stay `NotReady` until VPC CNI configures networking —
+same behavior as a kubeadm cluster without a CNI plugin.
 
-### Mode: VPC CNI
+### k3s config (always applied)
 
+```yaml
+# /etc/rancher/k3s/config.yaml
+flannel-backend: "none"
+disable-network-policy: true
+service-cidr: "10.43.0.0/16"
+cluster-dns: "10.43.0.10"
 ```
-ecp create-cluster my-k3s --distribution k3s --cni vpc
-```
-
-- Pods get IPs from the VPC subnet (prefix delegation)
-- Pod-to-pod traffic is direct (no overlay, no encapsulation)
-- SecurityGroups for Pods supported
-- ENI limits apply (prefix delegation helps: ~110 pods on t4g.medium)
-- Same CNI version and config as EKS-D-Xpress
 
 ---
 
@@ -95,39 +90,19 @@ The k3s AMI must include VPC CNI artifacts regardless of the runtime mode
 602401143452.dkr.ecr.us-west-2.amazonaws.com/amazon-k8s-cni-init:v1.22.3
 ```
 
-### 3.2 k3s config changes at boot (VPC CNI mode)
-
-When `CNI_MODE=vpc` is set in `cluster.env`:
+### 3.2 k3s config at boot
 
 ```yaml
-# /etc/rancher/k3s/config.yaml (VPC CNI mode)
+# /etc/rancher/k3s/config.yaml (always — VPC CNI mode)
 flannel-backend: "none"
 disable-network-policy: true
-# Pod CIDR comes from VPC subnet, not cluster-cidr
-# cluster-cidr is still needed for Service allocation
-service-cidr: "10.43.0.0/16"
-cluster-dns: "10.43.0.10"
-```
-
-When `CNI_MODE=flannel` (default):
-
-```yaml
-# /etc/rancher/k3s/config.yaml (Flannel mode)
-# flannel-backend defaults to "vxlan" — no override needed
-cluster-cidr: "10.42.0.0/16"
 service-cidr: "10.43.0.0/16"
 cluster-dns: "10.43.0.10"
 ```
 
 ---
 
-## 4. Boot Sequence Changes
-
-### Flannel mode (unchanged from current implementation)
-
-1. Start k3s → Flannel auto-configures → nodes Ready immediately
-
-### VPC CNI mode (new path in `setup-k3s-xpress.sh`)
+## 4. Boot Sequence
 
 1. Start k3s with `flannel-backend=none` → nodes NotReady (no CNI)
 2. Disable ec2-net-utils policy-routes (same as EKS-D `08-install-cni.sh`)
@@ -386,29 +361,18 @@ When using VPC CNI mode with Karpenter:
 
 ---
 
-## 6. CLI Flag Addition
+## 6. CLI
 
 ```
 ecp create-cluster my-k3s \
   --distribution k3s \
-  --cni vpc \              # NEW: "flannel" (default) or "vpc"
-  --autoscaling karpenter  # NEW: "none" (default) or "karpenter"
   --arch arm64 \
   --pricing spot \
   --wait
 ```
 
-### Autoscaling modes
-
-| Mode | Description |
-|------|-------------|
-| `none` (default) | Single-node, no worker scaling |
-| `karpenter` | Karpenter manages worker fleet via EC2NodeClass |
-
-When `--autoscaling karpenter`:
-- Control plane stores the k3s server URL + token in SSM
-- Karpenter is installed on the server node
-- Worker AMI must be the same k3s-Xpress AMI (it contains both server and agent)
+VPC CNI and Karpenter are always enabled — no flags needed. The only
+difference from EKS-D is `--distribution k3s`.
 
 ---
 
@@ -449,24 +413,23 @@ and 50% of the boot time.
 
 ### Phase 1 additions (AMI builder)
 
-- [ ] Pre-bake VPC CNI manifest + binaries in k3s AMI (reuse `vpc-cni.sh` logic)
-- [ ] Pre-pull VPC CNI images into airgap tarball
-- [ ] Pre-bake `k3s-agent.service` systemd unit for worker nodes
-- [ ] Add Karpenter chart to pre-cached charts
+- [x] Pre-bake VPC CNI manifest + binaries in k3s AMI (reuse `vpc-cni.sh` logic)
+- [x] Pre-pull VPC CNI images into airgap tarball
+- [x] Pre-bake `k3s-agent.service` systemd unit for worker nodes
+- [x] Add Karpenter chart to pre-cached charts
 
 ### Phase 2 additions (boot scripts)
 
-- [ ] `setup-k3s-xpress.sh`: read `CNI_MODE` from cluster.env, branch config
-- [ ] New: `cluster-setup/k3s/install-vpc-cni.sh` (adapted from `08-install-cni.sh`)
-- [ ] New: `cluster-setup/k3s/install-karpenter.sh` (k3s-specific user data template)
-- [ ] Post-boot: push k3s token to SSM (for Karpenter worker join)
+- [x] `setup-k3s-xpress.sh`: always VPC CNI, always Karpenter
+- [x] `cluster-setup/k3s/install-vpc-cni.sh` (adapted from `08-install-cni.sh`)
+- [x] `cluster-setup/k3s/install-karpenter.sh` (k3s-specific user data template)
+- [x] Post-boot: push k3s token to SSM (for Karpenter worker join)
 
 ### Phase 3 additions (control plane)
 
-- [ ] `--cni` flag: `flannel` | `vpc`
-- [ ] `--autoscaling` flag: `none` | `karpenter`
-- [ ] cluster.env: add `CNI_MODE`, `AUTOSCALING_MODE`
-- [ ] SSM: publish k3s-url and k3s-token when Karpenter enabled
+- [ ] `--distribution` flag on `create-cluster`
+- [ ] cluster.env: distribution-aware user data
+- [ ] SSM: publish k3s-url and k3s-token at boot
 - [ ] EC2NodeClass template generation with k3s agent user data
 
 ---

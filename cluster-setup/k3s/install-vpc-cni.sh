@@ -1,6 +1,6 @@
 #!/bin/bash
 # install-vpc-cni.sh — Install AWS VPC CNI on k3s-Xpress.
-# Called by setup-k3s-xpress.sh when CNI_MODE=vpc.
+# Called by setup-k3s-xpress.sh after k3s starts.
 #
 # Prerequisites:
 #   - k3s started with flannel-backend=none

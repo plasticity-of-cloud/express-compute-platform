@@ -37,7 +37,7 @@ Pinned versions for the k3s-Xpress distribution. Both 1.35 and 1.36 tracks are s
 |--------|-------------|------------|
 | Control plane | kubeadm + separate etcd | k3s server (embedded) |
 | Datastore | etcd (standalone) | SQLite (single) / embedded etcd (HA) |
-| CNI | AWS VPC CNI | Flannel VXLAN |
+| CNI | AWS VPC CNI | AWS VPC CNI |
 | Binaries | ~12 (kubeadm, kubelet, kubectl, etcd, etc.) | 1 (k3s) + kubectl symlink |
 | Boot time target | < 4 min | < 2 min |
 | Image size | ~3.5 GB | ~2 GB |

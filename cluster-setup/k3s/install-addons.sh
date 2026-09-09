@@ -1,6 +1,6 @@
 #!/bin/bash
 # install-addons.sh — Install k3s-Xpress add-ons from local Helm charts.
-# Called by setup-k3s-xpress.sh after k3s is ready.
+# Called by setup-k3s-xpress.sh after k3s + VPC CNI are ready.
 #
 # Install order matters:
 #   1. cert-manager       — TLS certificate lifecycle (required by ECP WI webhooks)
@@ -52,8 +52,8 @@ fi
 # ── 2. ECP Workload Identity ─────────────────────────────────────────────────
 # Must be installed BEFORE CloudWatch and EBS CSI — those add-ons use
 # ECP Workload Identity (EKS Pod Identity equivalent) for AWS credentials.
+echo "  [2/5] Installing ECP Workload Identity..."
 if [ -n "${ECP_ENDPOINT:-}" ] && [[ "${INSTALL_ECP:-false}" == "true" ]]; then
-  echo "  [2/5] Installing ECP Workload Identity..."
   export ECP_ENDPOINT CLUSTER_NAME AWS_REGION ECP_CONTROL_PLANE_VERSION
   export CHART_DIR="${CHARTS_DIR}"
 
@@ -72,7 +72,7 @@ if [ -n "${ECP_ENDPOINT:-}" ] && [[ "${INSTALL_ECP:-false}" == "true" ]]; then
     fi
   fi
 else
-  echo "  [2/5] Skipping ECP Workload Identity (ECP_ENDPOINT not set or INSTALL_ECP=false)"
+  echo "  Skipping ECP Workload Identity (ECP_ENDPOINT not set or INSTALL_ECP=false)"
 fi
 
 # ── 3. CloudWatch Observability ───────────────────────────────────────────────
@@ -100,7 +100,6 @@ bash "${SCRIPT_DIR}/install-ebs-csi.sh"
 
 # ── 5. Metrics Server (verify k3s built-in is functional) ─────────────────────
 echo "  [5/5] Verifying metrics-server..."
-# k3s ships metrics-server by default (we haven't disabled it)
 kubectl wait --for=condition=available deployment/metrics-server \
   -n kube-system --timeout=30s 2>/dev/null && {
   echo "  ✓ metrics-server ready (k3s built-in)"

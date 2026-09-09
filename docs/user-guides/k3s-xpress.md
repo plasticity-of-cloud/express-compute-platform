@@ -93,28 +93,29 @@ ecp delete-cluster my-k3s
 
 ## Networking
 
-### Default: Flannel VXLAN
+### AWS VPC CNI
 
-k3s ships with Flannel as the default CNI. Pod networking uses VXLAN overlay,
-which means pods get IPs from the cluster-cidr range (10.42.0.0/16), not from
-the VPC CIDR.
+k3s-Xpress uses the same AWS VPC CNI as EKS-D-Xpress. Pods get IPs directly
+from the VPC subnet (prefix delegation), enabling VPC-native networking:
+
+- Pod-to-pod traffic is direct (no overlay, no encapsulation)
+- SecurityGroups for Pods supported
+- VPC flow logs have full visibility into pod traffic
+- ENI limits apply (~110 pods per node with prefix delegation on c6g.large)
 
 ```
-Pod CIDR:     10.42.0.0/16
 Service CIDR: 10.43.0.0/16
 Cluster DNS:  10.43.0.10
+Pod IPs:      From VPC subnet (prefix delegation)
 ```
 
-### Internet Access
-
-Pods reach AWS services and the internet via the node's NAT Gateway (standard
-VPC pattern). No VPC CNI is needed.
+k3s's built-in Flannel is disabled (`flannel-backend: "none"`) — the VPC CNI
+DaemonSet handles all pod networking.
 
 ### Load Balancing
 
-Since traefik and servicelb are disabled, use:
-- **AWS Load Balancer Controller** for Ingress (ALB) and Service type LoadBalancer (NLB)
-- **NodePort** for simple dev access
+Use AWS Load Balancer Controller for Ingress (ALB) and Service type
+LoadBalancer (NLB), or NodePort for simple dev access.
 
 ---
 
@@ -220,7 +221,6 @@ K3S_DISABLE=traefik,servicelb
 
 | Instance | vCPU | RAM | Monthly (Spot) | Use Case |
 |----------|------|-----|----------------|----------|
-| c6g.medium | 1 | 2 GB | ~$10 | Flannel-only dev (no Karpenter/VPC CNI) |
 | c6g.large | 2 | 4 GB | ~$20 | Default — full add-on stack |
 | c6g.xlarge | 4 | 8 GB | ~$40 | Heavy workloads on server node |
 
@@ -236,14 +236,14 @@ provides enough headroom for system components plus light server-node workloads.
 |---------|-----------|-------------|
 | Boot time | < 2 min | < 4 min |
 | Min instance | c6g.large (2 vCPU, 4GB) | c6g.large (2 vCPU, 4GB) |
-| CNI | Flannel (overlay) | VPC CNI (ENI per pod) |
-| Datastore | SQLite | etcd |
-| Autoscaling | ASG-based | Karpenter |
+| CNI | VPC CNI (ENI per pod) | VPC CNI (ENI per pod) |
+| Datastore | SQLite (2 GB EBS) | etcd (20 GB EBS) |
+| Autoscaling | Karpenter | Karpenter |
 | EKS API compat | No | Yes |
 | Workload Identity | ✓ | ✓ |
 | CloudWatch | ✓ | ✓ |
+| EBS CSI | ✓ | ✓ |
 | Golden AMI | ✓ | ✓ |
-| Monthly cost (Spot) | ~$6–24 | ~$24–60 |
 
 ---
 

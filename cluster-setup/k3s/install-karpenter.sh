@@ -1,6 +1,6 @@
 #!/bin/bash
 # install-karpenter.sh — Install Karpenter on k3s-Xpress.
-# Called by setup-k3s-xpress.sh when AUTOSCALING_MODE=karpenter.
+# Called by setup-k3s-xpress.sh after add-ons are installed.
 #
 # This installs:
 #   1. Karpenter controller (same as EKS-D)

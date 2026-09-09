@@ -73,8 +73,6 @@ Flags:
   --arch string           Instance architecture: "arm64" (default) or "x86_64"
   --pricing string        Pricing model: "spot" (default) or "on-demand"
   --instance-type string  Override instance type (default: auto-select based on distribution)
-  --cni string            CNI plugin: "flannel" (k3s default) or "vpc" (VPC-native pod IPs)
-  --autoscaling string    Autoscaling mode: "none" (default) or "karpenter"
   --ssh-cidr string       CIDR for SSH access (optional)
   --wait                  Wait for cluster to be ready before returning
 ```
@@ -82,11 +80,11 @@ Flags:
 **Behavioral changes:**
 - When `--distribution k3s`:
   - AMI lookup reads from `/express-compute/infra/ami/k3s/{arch}/{version}` (not the EKS-D path)
-  - Default instance type: `c6g.large` (arm64) or `m7i.large` (x86_64) — same as EKS-D (full add-on stack requires it)
-  - Launch template uses k3s-specific user data (seeds `/opt/k3s-xpress/cluster.env`)
-  - No separate etcd volume attached
+  - Launch template from `/express-compute/infra/launch-template/k3s/{arch}/{pricing}`
+  - Same add-on stack as EKS-D: VPC CNI, Karpenter, Workload Identity, CloudWatch, EBS CSI
+  - User data writes to `/opt/k3s-xpress/cluster.env` (not `/opt/eks-d/cluster.env`)
   - Boot timeout: 120s (vs 240s for EKS-D)
-  - `cluster.env` is written to `/opt/k3s-xpress/cluster.env` (not `/opt/eks-d/cluster.env`)
+  - No separate etcd EBS volume (uses 2 GB data volume for SQLite instead of 20 GB for etcd)
   - Progress queue dedup ID prefix: `k3s-` to avoid collisions
 
 **New instance defaults by distribution:**
@@ -178,8 +176,6 @@ CLUSTER_NAME=${cluster_name}
 AWS_REGION=${region}
 ECP_ENDPOINT=${ecp_endpoint}
 PROGRESS_QUEUE_URL=${progress_queue_url}
-CNI_MODE=${cni_mode}
-AUTOSCALING_MODE=${autoscaling_mode}
 ENVEOF
 ```
 
@@ -232,8 +228,6 @@ The tenant record must store the distribution:
   "tenantId": "tenant-abc123",
   "clusterId": "my-k3s",
   "distribution": "k3s",        // NEW — "eks-d" (default) | "k3s"
-  "cni": "vpc",                 // NEW — "flannel" (default) | "vpc"
-  "autoscaling": "karpenter",   // NEW — "none" (default) | "karpenter"
   "arch": "arm64",
   "instanceType": "c6g.large",
   "k8sVersion": "1.35",
@@ -264,9 +258,8 @@ New launch templates for k3s (smaller root volume, no etcd volume):
 
 ### 5.2 Security Group
 
-k3s uses the same ports as EKS-D (6443 for API server). The existing
-security group works unchanged. Flannel VXLAN uses port 8472/UDP for
-inter-node traffic (relevant if multi-node support is added post-GA).
+k3s uses the same ports as EKS-D (6443 for API server, VPC CNI ports).
+The existing security group works unchanged.
 
 ---
 
