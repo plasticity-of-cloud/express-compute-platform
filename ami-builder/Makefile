@@ -8,8 +8,13 @@ DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ROOT := $(abspath $(DIR)/..)
 
 .PHONY: all ami build stage packer-init ensure-packer clean-sgs sign
+.PHONY: k3s k3s-ami k3s-build k3s-stage k3s-packer-init k3s-sign
 
 all: ami
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EKS-D Golden AMI targets
+# ═══════════════════════════════════════════════════════════════════════════════
 
 ami: stage build clean-sgs sign
 
@@ -41,6 +46,48 @@ stage:
 
 packer-init: ensure-packer
 	packer init "$(DIR)ecp-golden-ami.pkr.hcl"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# k3s-Xpress Golden AMI targets
+# ═══════════════════════════════════════════════════════════════════════════════
+
+k3s: k3s-ami
+k3s-ami: k3s-stage k3s-build clean-sgs k3s-sign
+
+k3s-build: k3s-packer-init
+	@mkdir -p "$(DIR)output"
+	PACKER_LOG=1 PACKER_LOG_PATH="$(ROOT)/packer-k3s-build-$(AMI_VERSION).log" \
+	packer build \
+	  $(_ONLY) \
+	  -var "aws_region=$(AWS_REGION)" \
+	  -var "k3s_kubernetes_version=$(KUBERNETES_VERSION)" \
+	  -var "ami_version=$(AMI_VERSION)" \
+	  -var "build_type=$(BUILD_TYPE)" \
+	  "$(DIR)k3s-xpress.pkr.hcl"
+
+k3s-stage:
+	@mkdir -p "$(DIR)files"
+	@GOARCHES=$$(case '$(ARCH)' in arm64) echo arm64;; x86_64) echo amd64;; both) echo 'amd64 arm64';; esac); \
+	for GOARCH in $$GOARCHES; do \
+	  ARCH_DIR=$$([ "$$GOARCH" = "amd64" ] && echo x86_64 || echo arm64); \
+	  SRC="$(ROOT)/cluster-setup/$$ARCH_DIR/ecr-credential-provider-$(KUBERNETES_VERSION)"; \
+	  [ -f "$$SRC" ] || SRC="$(ROOT)/cluster-setup/$$ARCH_DIR/ecr-credential-provider"; \
+	  [ -f "$$SRC" ] || { echo "ERROR: ecr-credential-provider not found for $$GOARCH (k8s $(KUBERNETES_VERSION))"; exit 1; }; \
+	  cp "$$SRC" "$(DIR)files/ecr-credential-provider-$$GOARCH"; \
+	  chmod +x "$(DIR)files/ecr-credential-provider-$$GOARCH"; \
+	  echo "✓ staged ecr-credential-provider-$$GOARCH (k3s)"; \
+	done
+
+k3s-packer-init: ensure-packer
+	packer init "$(DIR)k3s-xpress.pkr.hcl"
+
+k3s-sign:
+	MANIFEST_FILE="$(DIR)output/ami-manifest-k3s-entries.json" \
+	AMI_VERSION=$(AMI_VERSION) AWS_REGION=$(AWS_REGION) bash "$(DIR)scripts/sign-ami.sh"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Shared targets
+# ═══════════════════════════════════════════════════════════════════════════════
 
 ensure-packer:
 	@command -v packer >/dev/null 2>&1 || { \

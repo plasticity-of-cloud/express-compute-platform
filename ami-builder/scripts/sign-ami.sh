@@ -10,7 +10,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST="${SCRIPT_DIR}/../output/ami-manifest-entries.json"
+MANIFEST="${MANIFEST_FILE:-${SCRIPT_DIR}/../output/ami-manifest-entries.json}"
 AMI_VERSION="${AMI_VERSION:?set AMI_VERSION}"
 AWS_REGION="${AWS_REGION:?set AWS_REGION}"
 
