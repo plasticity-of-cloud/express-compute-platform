@@ -82,7 +82,7 @@ k3s-packer-init: ensure-packer
 	packer init "$(DIR)k3s-xpress.pkr.hcl"
 
 k3s-sign:
-	MANIFEST_FILE="$(DIR)output/packer-manifest-k3s.json" \
+	MANIFEST_FILE="$(DIR)output/ami-manifest-k3s-entries.json" \
 	AMI_VERSION=$(AMI_VERSION) AWS_REGION=$(AWS_REGION) bash "$(DIR)scripts/sign-ami.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
