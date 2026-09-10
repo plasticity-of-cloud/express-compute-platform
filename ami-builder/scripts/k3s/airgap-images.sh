@@ -32,7 +32,7 @@ if [ -n "$CW_CHART" ]; then
   helm template amazon-cloudwatch-observability "$CW_CHART" \
     --set clusterName=build --set region=us-east-1 2>/dev/null | \
     python3 "${EXTRACT_IMAGES_PY}" | \
-    grep -Ev 'windows|nvidia|neuron|dcgm-exporter|kubekins-e2e' | sort -u >> "${IMAGE_LIST}"
+    grep -Ev 'windows|nvidia|neuron|dcgm-exporter|kubekins-e2e|k8s-staging-test-infra' | sort -u >> "${IMAGE_LIST}"
 fi
 
 # EBS CSI images
@@ -40,7 +40,7 @@ EBS_CHART=$(ls "${CHARTS_DIR}"/aws-ebs-csi-driver-*.tgz 2>/dev/null | head -1)
 if [ -n "$EBS_CHART" ]; then
   helm template aws-ebs-csi-driver "$EBS_CHART" 2>/dev/null | \
     python3 "${EXTRACT_IMAGES_PY}" | \
-    grep -Ev 'windows|nvidia|neuron|e2e-test' | sort -u >> "${IMAGE_LIST}"
+    grep -Ev 'windows|nvidia|neuron|e2e-test|kubekins-e2e|k8s-staging-test-infra' | sort -u >> "${IMAGE_LIST}"
 fi
 
 # ECP Workload Identity images
